@@ -1,6 +1,6 @@
 import './style.css';
 import * as THREE from 'three';
-import { detectQuality, saveQuality, capQuality, TIERS, TIER_ORDER } from './render/quality.js';
+import { detectQuality, saveQuality, capQuality, settingsFor, TIERS, TIER_ORDER } from './render/quality.js';
 import { createPipeline } from './render/pipeline.js';
 import { patchSceneBoxEnv, setBoxEnv } from './render/boxenv.js';
 import { setTextureScale, texStats } from './materials/texPool.js';
@@ -63,7 +63,7 @@ async function boot() {
   const M = await createMaterials(renderer, Q); lap(`materials (${texStats.generated} generated, ${texStats.cached} from cache)`);
 
   ui.progress(0.4, 'Building architecture…'); await tick();
-  const arch = buildArchitecture(M, { washTex: M.washTex, contextDensity: QD.tier === 'low' ? 0.55 : QD.tier === 'medium' ? 0.8 : 1 });
+  const arch = buildArchitecture(M, { washTex: M.washTex, contextDensity: 0.8 });
   scene.add(arch.root);
   const doors = buildDoors(M);
   scene.add(doors.group); lap('architecture');
@@ -324,6 +324,7 @@ async function boot() {
   window.__qa = {
     THREE, validation, nav, runNav, tour, views, mirrors, composer, gtao, pipeline, quality: QD, texStats, renderer, scene, camera, ctl, doors, lighting, design, studio, M, arch,
     captureNow: () => capture(liveProbes ? probeKey() : undefined),
+    applyTier: (...a) => applyTier(...a),
     frame: () => loop(), // step one live frame by hand (QA in a hidden tab, where rAF is paused)
     setLight: (patch) => applyScene(patch),
     teleport: (n) => { const s = safeSpot(teleports[n]); ctl.enterExplore(s); },
@@ -404,7 +405,9 @@ async function boot() {
   lap('ready'); ui.ready();
   setTimeout(() => applyZone(null), 60); // room reflection probe refines the image right after first paint
   let lastLoop = 0;
+  let paused = false; // true while a quality change compiles its shaders (the last frame stays on screen)
   const loop = (now = performance.now()) => {
+    if (paused) { clock.getDelta(); return; }
     if (Q.maxFps && now - lastLoop < 1000 / Q.maxFps - 2) return; // phones: 30 fps cap saves battery and heat
     lastLoop = now;
     const dt = Math.min(0.05, clock.getDelta());
@@ -455,23 +458,47 @@ async function boot() {
     document.body.append(rot);
   }
 
-  // ---- render quality control (Studio → Lighting) ----
-  let statusEl = null, frameN = 0;
-  {
-    const L = document.querySelector('[data-pane="light"]');
-    if (L) {
-      const g = document.createElement('div'); g.className = 'grp quality';
-      g.innerHTML = `<label>Render quality <output>${QD.auto ? 'Auto · ' : ''}${TIERS[QD.tier].label}</output></label>
-        <div class="chips" role="group" aria-label="Render quality">${['auto', ...TIER_ORDER].map((k) => `<button data-q="${k}" class="${(QD.auto ? 'auto' : QD.tier) === k ? 'on' : ''}">${k === 'auto' ? 'Auto' : TIERS[k].label}</button>`).join('')}</div>
-        <small class="qstat" aria-live="off"></small>`;
-      L.prepend(g);
-      statusEl = g.querySelector('.qstat');
-      g.addEventListener('click', (e) => {
-        const b = e.target.closest('button[data-q]'); if (!b) return;
-        saveQuality(b.dataset.q); ui.showScene('Applying quality…'); setTimeout(() => location.reload(), 150);
-      });
-    }
+  // ---- render quality: opens on Low (fast start); raise or lower it live, no reload ----
+  let statusEl = null, frameN = 0, tierBusy = false;
+  const DESC = { low: 'Fastest start · best battery', medium: 'Ambient occlusion + bloom', high: 'Anti-aliasing, soft shadows, sharper textures', ultra: 'Everything on, sharpest image' };
+  const qchip = document.createElement('div'); qchip.className = 'qchip';
+  qchip.innerHTML = `<button type="button" class="qbtn" aria-haspopup="true" aria-expanded="false" aria-label="Render quality"><span>QUALITY</span><b></b><i></i></button>
+    <div class="qpop" role="menu">${TIER_ORDER.map((k) => `<button type="button" role="menuitem" data-q="${k}"><b>${TIERS[k].label}</b><small>${DESC[k]}</small><em></em></button>`).join('')}<small class="qstat" aria-live="off"></small></div>`;
+  document.body.append(qchip);
+  statusEl = qchip.querySelector('.qstat');
+  const qb = qchip.querySelector('.qbtn'), qLabel = qb.querySelector('b'), qTag = qb.querySelector('i');
+  const syncChip = (busy) => {
+    qLabel.textContent = busy || TIERS[QD.tier].label.toUpperCase();
+    qchip.querySelectorAll('.qpop button').forEach((b) => { b.classList.toggle('on', b.dataset.q === QD.tier); b.querySelector('em').textContent = b.dataset.q === QD.recommended ? 'Recommended for this device' : ''; });
+    const up = TIER_ORDER.indexOf(QD.recommended) > TIER_ORDER.indexOf(QD.tier);
+    qchip.classList.toggle('hint', up && !busy);
+    qTag.textContent = up && !busy ? '▲ RAISE' : '';
+  };
+  const openQ = (on) => { qchip.classList.toggle('open', on); qb.setAttribute('aria-expanded', String(on)); };
+  qb.addEventListener('click', (e) => { e.stopPropagation(); openQ(!qchip.classList.contains('open')); });
+  document.addEventListener('click', (e) => { if (!qchip.contains(e.target)) openQ(false); });
+  async function applyTier(name, { save = true } = {}) {
+    if (tierBusy || !TIERS[name]) return; if (name === QD.tier && !tierBusy) { openQ(false); return; }
+    tierBusy = true; openQ(false); syncChip('APPLYING…');
+    const t0 = performance.now();
+    Object.assign(Q, settingsFor(name, QD.mobile)); QD.tier = name; QD.auto = false;
+    if (save) saveQuality(name);
+    // instant: shadow + probe sizes, planar mirrors, AO / bloom / MSAA / resolution cap
+    lighting.setShadowSize(Q.shadow); lighting.setProbeSize(Q.probe); lighting.clearProbeCache?.(); mirrors.configure(Q.mirrors);
+    pipeline.apply(); pipeline.shadowsDirty();
+    // pre-warm the newly enabled passes (AO / bloom shaders) while the last frame stays on screen
+    paused = true; await new Promise((r) => setTimeout(r, 30));
+    try { pipeline.renderDirect(1 / 60); } catch { /* ignore */ }
+    paused = false; clock.getDelta();
+    capture(liveProbes ? probeKey() : undefined);
+    ui.showScene(`${TIERS[name].label} quality · ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+    tierBusy = false; syncChip();
+    // texture detail follows in the background (cached sets swap in within a second or two)
+    M.upgradeTextures(Q.tex, Q.aniso, (p) => { if (p < 1) qLabel.textContent = `${TIERS[QD.tier].label.toUpperCase()} · TEXTURES ${Math.round(p * 100)}%`; else syncChip(); }).catch(() => syncChip());
   }
+  setTimeout(() => pipeline.warm().then((n) => console.info(`[boot] pre-compiled ${n} AO/bloom shaders in the background`)), 2500);
+  qchip.querySelector('.qpop').addEventListener('click', (e) => { const b = e.target.closest('button[data-q]'); if (b) applyTier(b.dataset.q); });
+  syncChip();
   renderer.setAnimationLoop(loop);
   // ?bench=<port>: scripted performance probe (boot laps, moving-camera frame times, time to a refined still)
   {

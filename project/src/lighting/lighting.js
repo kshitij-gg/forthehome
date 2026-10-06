@@ -198,8 +198,10 @@ export function createLighting(scene, renderer, M, arch, interiorsRoot, Q = {}) 
 
   // ---------- light pool ----------
   const mkPool = (list, n, make) => Array.from({ length: Math.min(n ?? list.length, list.length) }, () => { const l = make(); scene.add(l); if (l.target) scene.add(l.target); return { l, src: null, fade: 0 }; });
-  const pPool = mkPool(pl, Q.points, () => new THREE.PointLight(0xffffff, 0, 5, 2));
-  const sPool = mkPool(spots, Q.spots, () => new THREE.SpotLight(0xffffff, 0, 7, 0.3, 0.75, 2));
+  const MAXP = 12, MAXS = 8, MAXR = 3; // physical pool maxima (Ultra); the active budget follows the quality tier
+  const pPoolAll = mkPool(pl, MAXP, () => new THREE.PointLight(0xffffff, 0, 5, 2));
+  const sPoolAll = mkPool(spots, MAXS, () => new THREE.SpotLight(0xffffff, 0, 7, 0.3, 0.75, 2));
+  let pPool = pPoolAll, sPool = sPoolAll;
   const fillPool = (pool, list, focus, dt, isSpot, doRank = true) => {
     const all = pool.length >= list.length;
     if (doRank) {
@@ -230,7 +232,8 @@ export function createLighting(scene, renderer, M, arch, interiorsRoot, Q = {}) 
       if (isSpot) { l.angle = v.angle; l.penumbra = v.penumbra; l.target.position.copy(v.target.position); l.target.updateMatrixWorld(); }
     }
   };
-  const rPool = Array.from({ length: Math.min(Q.rects ?? portals.length, portals.length) }, () => { const l = new THREE.SpotLight(0xffffff, 0, 9, 1, 1, 2); scene.add(l); scene.add(l.target); return { l, src: null, fade: 0 }; });
+  const rPoolAll = Array.from({ length: Math.min(MAXR, portals.length) }, () => { const l = new THREE.SpotLight(0xffffff, 0, 9, 1, 1, 2); scene.add(l); scene.add(l.target); return { l, src: null, fade: 0 }; });
+  let rPool = rPoolAll;
   const roomAtFocus = (f) => { const x = f.x, y = -f.z; const r = ROOMS.find((q) => x >= q.rect[0] && x <= q.rect[2] && y >= q.rect[1] && y <= q.rect[3]); return r ? r.id : null; };
   const OPEN = new Set(['hall', 'dining', 'kitchen']);
   const fillPortals = (focus, dt, doRank = true) => {
@@ -268,7 +271,17 @@ export function createLighting(scene, renderer, M, arch, interiorsRoot, Q = {}) 
     if (doRank) { lastRank.copy(focus); rankAge = 0; rankSig = sig; }
     fillPool(pPool, pl, focus, dt, false, doRank); fillPool(sPool, spots, focus, dt, true, doRank); fillPortals(focus, dt, doRank);
   };
-  sys.poolSize = { points: pPool.length, spots: sPool.length, rects: rPool.length, total: pl.length + spots.length };
+  sys.poolSize = { points: 0, spots: 0, rects: 0, total: pl.length + spots.length };
+  /** Active real-light budget (changes the shader light counts → callers should recompile afterwards). */
+  sys.setBudget = ({ points, spots: sp, rects }) => {
+    const set = (all, n) => { const act = all.slice(0, Math.min(n, all.length)); all.forEach((s) => { const on = act.includes(s); s.l.visible = on; if (!on) { s.src = null; s.l.intensity = 0; } }); return act; };
+    pPool = set(pPoolAll, points); sPool = set(sPoolAll, sp); rPool = set(rPoolAll, rects);
+    sys.poolSize.points = pPool.length; sys.poolSize.spots = sPool.length; sys.poolSize.rects = rPool.length;
+    rankSig = ''; // re-rank on the next frame
+  };
+  sys.setBudget({ points: Q.points, spots: Q.spots, rects: Q.rects });
+  sys.setShadowSize = (n) => { sun.shadow.mapSize.set(n, n); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } };
+  sys.setProbeSize = (n) => { cubeRT.setSize(n, n); };
 
   // ---------- emissive inventories ----------
   const special = {};
@@ -310,7 +323,7 @@ export function createLighting(scene, renderer, M, arch, interiorsRoot, Q = {}) 
       M.neighbourBand.emissiveIntensity = lowSun * 0.12;
       scene.fog = new THREE.Fog(new THREE.Color(0xdfe6ee).lerp(new THREE.Color(0xd8a988), lowSun * 0.6), 70, 280);
     } else {
-      sun.intensity = 0; sun.castShadow = false;
+      sun.intensity = 0; // keep castShadow on: toggling it changes every material's shader (a multi-second recompile on the first night frame)
       hemi.color.set(0x24304a); hemi.groundColor.set(0x0b0b0d); hemi.intensity = 0.05;
       scene.environmentIntensity = 0.55;
       sky.visible = false; scene.background = nightBg;

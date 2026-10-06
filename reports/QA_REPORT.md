@@ -166,3 +166,16 @@ Browser checks were done in the Claude desktop browser pane against both the dev
   - The bottom menu fits small screens and the safe areas.
 - **Phone over Wi-Fi:** `npm run phone` builds and serves `web/` on the local network (port 5210). Open the printed Network URL on the phone.
 - **Studio / video tools:** load only on the dev server and ship in neither build.
+
+## 15. Fast start + live quality + day/night
+- **Opens on Low** (fast start). A **QUALITY** chip (top-right) switches Low / Medium / High / Ultra **live, no reload**.
+  - An upgrade takes about 0.4–0.6 s (measured).
+  - Texture detail then swaps in from the cache within a second or two, in the background.
+  - A chosen tier is remembered for the next visit. The chip pulses once to suggest the tier recommended for the device.
+  - Shader-affecting settings (light counts, clearcoat/sheen) are identical on all tiers, so a tier change never recompiles shaders. A trial that changed them took 23–35 s, so it was dropped.
+  - The AO and bloom shaders are pre-compiled in the background about 2.5 s after boot.
+- **Day↔night:** the first night frame took about 32 s because the sun's shadow was switched off, which rebuilt 28 shader programs. The sun now keeps its shadow on and is set to intensity 0 at night. The first night frame is now about 36 ms.
+- **Phones:**
+  - They render near native pixel density (up to 2×) within a per-tier pixel budget (about 1.2 MP on Low), so the picture is no longer blurry.
+  - Textures are at least 0.75×, and anisotropy is at least 4.
+  - In the 740×360 emulation the canvas renders at 1480×720.

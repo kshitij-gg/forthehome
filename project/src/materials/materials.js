@@ -1,7 +1,7 @@
 // Shared PBR palette — one material instance per finish, reused everywhere.
 // Palette intent: ~65% warm white, 20% warm grey, 10% beige/taupe, 5% walnut/charcoal/brass.
 import * as THREE from 'three';
-import { gen } from './texPool.js';
+import { gen, setTextureScale } from './texPool.js';
 import { patchBoxEnv } from '../render/boxenv.js';
 import { dirtTexture, flutedNormal, jaaliAlpha, caneSet, leafTexture, radialTexture, softRectTexture, signTexture, artTexture, linearFadeTexture, facadeTile, grassTexture, skylineTexture } from './textures.js';
 
@@ -23,9 +23,18 @@ let QS = { physical: true, micro: true, aniso: 8 };
 /** Per-device material tuning: strips the costly physical lobes on low tiers and enables box-projected reflections. */
 export function tuneMaterial(m) {
   if (!m) return m;
-  if (!QS.physical && m.isMeshPhysicalMaterial) { m.clearcoat = 0; m.sheen = 0; }
+  if (m.isMeshPhysicalMaterial) {
+    if (m.userData.cc0 === undefined) { m.userData.cc0 = m.clearcoat; m.userData.sh0 = m.sheen; }
+    m.clearcoat = QS.physical ? m.userData.cc0 : 0; m.sheen = QS.physical ? m.userData.sh0 : 0;
+  }
   patchBoxEnv(m);
   return m;
+}
+/** Live tier change: clearcoat/sheen on or off for every material in `root` (+ future ones). */
+export function setMaterialQuality(q, root) {
+  QS = { ...QS, ...q };
+  const seen = new Set();
+  root?.traverse((o) => { if (!o.material) return; (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { if (!seen.has(m)) { seen.add(m); if (m.isMeshPhysicalMaterial) { tuneMaterial(m); m.needsUpdate = true; } } }); });
 }
 
 export async function createMaterials(renderer, Q = {}) {
@@ -60,7 +69,7 @@ export async function createMaterials(renderer, Q = {}) {
     linen: ['fabricSet', { base: 0xf2eee7, worldSize: 0.3, weave: 100, slub: 0.05, seed: 13 }],
     rug: ['fabricSet', { base: 0xf0f0f0, worldSize: 0.4, weave: 110, slub: 0.14, seed: 17, twill: true }],
   };
-  if (QS.micro !== false) Object.assign(JOBS, {
+  Object.assign(JOBS, {
     smudge: ['smudgeSet', { size: 512, seed: 5 }],
     brushed: ['brushedSet', { size: 512, seed: 9 }],
     peel: ['peelSet', { size: 512, seed: 4 }],
@@ -133,7 +142,8 @@ export async function createMaterials(renderer, Q = {}) {
   const ov = tex.oakVeneer, wn = tex.walnut;
   M.oak = std({ map: ov.map, normalMap: ov.normalMap, roughnessMap: ov.roughnessMap, roughness: 0.95, normalScale: v2(0.45) });
   M.walnut = std({ map: wn.map, normalMap: wn.normalMap, roughnessMap: wn.roughnessMap, roughness: 0.85, normalScale: v2(0.45) });
-  const rot = (t) => { const q = t.clone(); q.rotation = Math.PI / 2; q.needsUpdate = true; return q; };
+  const rotClones = [];
+  const rot = (t) => { const q = t.clone(); q.rotation = Math.PI / 2; q.needsUpdate = true; rotClones.push([q, t]); return q; };
   M.oakV = std({ map: rot(ov.map), normalMap: rot(ov.normalMap), roughnessMap: rot(ov.roughnessMap), roughness: 0.92, normalScale: v2(0.45) });
   M.walnutV = std({ map: rot(wn.map), normalMap: rot(wn.normalMap), roughnessMap: rot(wn.roughnessMap), roughness: 0.82, normalScale: v2(0.45) });
   M.flutedOak = std({ map: rot(ov.map), normalMap: tex.fluted, normalScale: v2(1.6), roughnessMap: rot(ov.roughnessMap), roughness: 0.92 });
@@ -277,6 +287,22 @@ export async function createMaterials(renderer, Q = {}) {
   M.spotLens = new THREE.MeshStandardMaterial({ color: 0xddd8d0, emissive: 0xfff0dc, emissiveIntensity: 0, roughness: 0.3 });
 
   M._tex = tex;
+  // Raise texture detail in the background (no pause): each set is regenerated at the new scale (cached
+  // after the first time) and its images swapped into the existing texture objects, one set per tick.
+  M.upgradeTextures = async (scale, aniso, onProgress) => {
+    setTextureScale(scale);
+    const keys = Object.keys(JOBS); let n = 0;
+    for (const k of keys) {
+      const [fn, args] = JOBS[k];
+      const nu = await gen(fn, args, aniso);
+      const old = tex[k];
+      for (const name of Object.keys(nu)) { const o = old?.[name], v = nu[name]; if (o && o.isTexture && v && v.isTexture) { o.image = v.image; o.anisotropy = Math.min(aniso, maxAniso); o.dispose(); o.needsUpdate = true; } }
+      for (const [c, src] of rotClones) if (c.image !== src.image && keys.some((kk) => Object.values(tex[kk] || {}).includes(src))) { c.image = src.image; c.anisotropy = src.anisotropy; c.dispose(); c.needsUpdate = true; }
+      onProgress?.(++n / keys.length);
+      await new Promise((r) => setTimeout(r, 90)); // spread GPU uploads over time
+    }
+  };
+  M.setAniso = (a) => { QS.aniso = a; };
   for (const m of Object.values(M)) if (m && m.isMaterial) tuneMaterial(m);
   return M;
 }

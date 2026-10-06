@@ -23,7 +23,7 @@ export function createPipeline({ renderer, scene, camera, Q, sun = null, sunTarg
   composer.renderToScreen = false;
   composer.addPass(new RenderPass(scene, camera));
   let gtao = null, bloom = null;
-  if (Q.ao > 0) {
+  {
     try {
       gtao = new GTAOPass(scene, camera, 4, 4);
       gtao.updateGtaoMaterial({ radius: 0.55, distanceExponent: 1.5, thickness: 1.2, scale: 1.25, samples: Q.aoSamples || 12, distanceFallOff: 1.0 });
@@ -32,7 +32,9 @@ export function createPipeline({ renderer, scene, camera, Q, sun = null, sunTarg
       composer.addPass(gtao);
     } catch (e) { console.info('GTAO unavailable', e); gtao = null; }
   }
-  if (Q.bloom) { bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.2, 0.5, 0.92); composer.addPass(bloom); }
+  bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.2, 0.5, 0.92); composer.addPass(bloom);
+  if (gtao) gtao.enabled = Q.ao > 0;
+  bloom.enabled = !!Q.bloom;
 
   // accumulation (ping-pong) + output
   const accA = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, depthBuffer: false }), accB = accA.clone();
@@ -106,6 +108,7 @@ export function createPipeline({ renderer, scene, camera, Q, sun = null, sunTarg
   // ---- sizing / dynamic resolution ----
   let W = 1, H = 1, PR = Math.min(window.devicePixelRatio || 1, Q.prMax), aoScale = Q.ao > 0 ? Q.ao : 1;
   const applySize = () => {
+    if (fixedPR === null) PR = Math.min(PR, devMax()); // never above the device's pixel budget
     renderer.setPixelRatio(PR); renderer.setSize(W, H);
     composer.setPixelRatio(PR); composer.setSize(W, H);
     if (gtao) gtao.setSize(Math.max(2, Math.round(W * PR * aoScale)), Math.max(2, Math.round(H * PR * aoScale)));
@@ -113,7 +116,7 @@ export function createPipeline({ renderer, scene, camera, Q, sun = null, sunTarg
     accA.setSize(Math.round(W * PR), Math.round(H * PR)); accB.setSize(Math.round(W * PR), Math.round(H * PR));
     reset();
   };
-  const devMax = () => Math.min(window.devicePixelRatio || 1, Q.prMax);
+  const devMax = () => Math.min(window.devicePixelRatio || 1, Q.prMax, Q.maxPixels ? Math.sqrt(Q.maxPixels / Math.max(1, W * H)) : Infinity);
   let fpsAcc = 0, fpsN = 0, fixedPR = null, stillFor = 0;
 
   // ---- accumulation state ----
@@ -172,6 +175,29 @@ export function createPipeline({ renderer, scene, camera, Q, sun = null, sunTarg
     /** Force a fixed pixel ratio (offline recording) or null to return to dynamic resolution. */
     fixPixelRatio(pr) { fixedPR = pr; PR = pr ?? devMax(); applySize(); },
     invalidate: reset,
+    /** Compile the AO / bloom shaders in parallel off the main thread (no frame hitch), so a later quality
+     *  upgrade finds them ready. Call once after boot, ideally while the user is looking at the scene. */
+    async warm() {
+      const mats = [];
+      for (const pass of [gtao, bloom]) if (pass) for (const v of Object.values(pass)) { if (v && v.isMaterial) mats.push(v); else if (v && v.isShaderMaterial === undefined && typeof v === 'object' && !v.isTexture) { for (const w of Object.values(v)) if (w && w.isMaterial) mats.push(w); } }
+      for (const m of bloom ? [...(bloom.separableBlurMaterials || []), ...(bloom.compositeMaterial ? [bloom.compositeMaterial] : [])] : []) if (!mats.includes(m)) mats.push(m);
+      const s = new THREE.Scene(), g = new THREE.PlaneGeometry(2, 2);
+      for (const m of new Set(mats)) { const q = new THREE.Mesh(g, m); q.frustumCulled = false; s.add(q); }
+      try { await renderer.compileAsync(s, new THREE.Camera()); } catch { /* compiled on first use instead */ }
+      return mats.length;
+    },
+    /** Re-read the (mutated) quality settings: AO / bloom on-off, AO scale + samples, MSAA, resolution cap. */
+    apply() {
+      if (gtao) {
+        gtao.enabled = Q.ao > 0; aoScale = Q.ao > 0 ? Q.ao : 1;
+        gtao.updateGtaoMaterial({ samples: Q.aoSamples || 12 }); gtao.updatePdMaterial({ samples: Math.max(4, (Q.aoSamples || 12) - 4) });
+      }
+      bloom.enabled = !!Q.bloom;
+      const ms = Q.msaa || 0;
+      if (composer.renderTarget1.samples !== ms) { composer.renderTarget1.samples = composer.renderTarget2.samples = ms; composer.renderTarget1.dispose(); composer.renderTarget2.dispose(); }
+      if (fixedPR === null) PR = Math.min(PR > 0 ? Math.max(PR, Q.prMin) : 1, devMax());
+      applySize();
+    },
     shadowsDirty() { renderer.shadowMap.needsUpdate = true; reset(); },
     /** Re-present the current image (accumulated if refining) — e.g. right before reading the canvas. */
     present() { if (n > 0) output(accRead.texture); else output(renderScene(1 / 60)); },

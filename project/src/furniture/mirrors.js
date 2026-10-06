@@ -6,9 +6,9 @@ import { rooms } from '../data/floorplan.ts';
 
 const ROOM_ALIAS = { entry: ['deoghar', 'foyer'], chrm: ['chrm'], mtoilet: ['mtoilet'], ctoilet: ['ctoilet'], chtoilet: ['chtoilet'] };
 
-export function buildMirrors(M, registry, renderer, size = 512) {
+export function buildMirrors(M, registry, renderer, size = 256) {
   const list = [];
-  if (!size) return { list, update() {} }; // low tier: mirrors keep their environment-map reflection
+  let enabled = size > 0; size = size || 256;
   const pr = Math.min(1.5, renderer.getPixelRatio());
   for (const it of registry) {
     it.obj.traverse((o) => {
@@ -38,10 +38,15 @@ export function buildMirrors(M, registry, renderer, size = 512) {
   const tmp = new THREE.Vector3();
   return {
     list,
+    /** Live quality: 0 disables planar reflections (mirrors fall back to the room probe), else resizes them. */
+    configure(n) {
+      enabled = n > 0;
+      if (enabled) for (const m of list) { const rt = m.ref.getRenderTarget(); const s = Math.round(n * pr); if (rt.width !== s) rt.setSize(s, s); }
+    },
     update(camera, active) {
       for (const m of list) {
         let on = false;
-        if (active) {
+        if (active && enabled) {
           const x = camera.position.x, y = -camera.position.z;
           on = m.rects.some((r) => x > r[0] - 0.4 && x < r[2] + 0.4 && y > r[1] - 0.4 && y < r[3] + 0.4);
           if (on) { m.ref.getWorldPosition(tmp); on = tmp.distanceTo(camera.position) < 6; }
