@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Architectural World</title>
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="world" aria-label="Interactive 3D architectural walkthrough"></canvas>
+      <div class="brand" aria-hidden="true">ARCHVIZ</div>
+      <div class="hint" aria-live="polite">Drag to orbit · scroll to zoom</div>
+      <nav class="modes" aria-label="View mode">
+        <button id="explore" type="button">Explore</button>
+        <button id="overview" type="button" aria-pressed="true">Overview</button>
+      </nav>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

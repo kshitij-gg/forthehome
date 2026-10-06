@@ -1,0 +1,15 @@
+{
+  "sourcePlan": "plans/example.png",
+  "units": "m",
+  "scale": {
+    "mode": "inferred",
+    "evidence": "provisional door-width reference",
+    "confidence": "low"
+  },
+  "style": "warm contemporary minimal",
+  "assumptions": [
+    "Ceiling height assumed 2.8 m until a dimension is available."
+  ],
+  "externalAssets": [],
+  "qa": []
+}

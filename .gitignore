@@ -1,0 +1,18 @@
+# dependencies, caches, local tooling
+node_modules/
+_cache/
+.claude/
+si-domains/
+# large generated media (kept locally)
+recordings/
+screenshots/
+audio/*.wav
+audio/*.png
+# deployable output (rebuild with `npm run build:web`)
+web/
+*.log
+.DS_Store
+# client floor-plan source files (private)
+plan/*.pdf
+plan/*.png
+project/.npmrc
