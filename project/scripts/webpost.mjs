@@ -1,11 +1,12 @@
-// Post-build for the deployable website (vite build --mode web → D:/claude code/3d/web).
+// Post-build for the deployable website (vite build --mode web → project/dist).
 // Writes cache headers for static hosts (Netlify / Cloudflare Pages read `_headers`; Vercel reads
 // vercel.json) and prints the transfer size of every file so the download budget stays visible.
 import { readdirSync, statSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gzipSync, brotliCompressSync } from 'node:zlib';
 
-const out = 'D:/claude code/3d/web';
+const out = join(fileURLToPath(new URL('..', import.meta.url)), 'dist');
 // hashed assets never change → cache for a year; the HTML entry must revalidate so updates ship instantly
 writeFileSync(join(out, '_headers'), `/assets/*
   Cache-Control: public, max-age=31536000, immutable

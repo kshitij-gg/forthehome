@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 // Build-time validation: fails the build if any labelled room is off by > 10 mm
 // or the plan topology is broken. Writes reports/DIMENSION_REPORT.md.
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -13,7 +14,7 @@ topo.errors.forEach((e) => console.log('ERROR  ' + e));
 topo.warnings.forEach((e) => console.log('WARN   ' + e));
 topo.info.forEach((e) => console.log('info   ' + e));
 
-const reportDir = 'D:/claude code/3d/reports';
+const reportDir = fileURLToPath(new URL('../../reports/', import.meta.url));
 mkdirSync(reportDir, { recursive: true });
 const md = `# Dimension Report
 

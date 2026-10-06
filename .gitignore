@@ -16,3 +16,4 @@ web/
 plan/*.pdf
 plan/*.png
 project/.npmrc
+project/dist/

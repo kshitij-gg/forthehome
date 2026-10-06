@@ -2,8 +2,9 @@
 // (opens directly from disk via file://, no server needed).
 import { readFileSync, writeFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const out = 'D:/claude code/3d/build';
+const out = join(fileURLToPath(new URL('..', import.meta.url)), '..', 'build');
 let html = readFileSync(join(out, 'index.html'), 'utf8');
 const assets = join(out, 'assets');
 const files = existsSync(assets) ? readdirSync(assets) : [];
